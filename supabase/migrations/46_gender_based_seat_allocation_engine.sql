@@ -17,9 +17,10 @@ BEGIN
     END IF;
 END $$;
 
--- 2. ADD COLUMN gender TO public.profiles WITH CONTROLLED VALUE CONSTRAINT
+-- 2. ADD NULLABLE COLUMN gender TO public.profiles WITH CONTROLLED VALUE CONSTRAINT
+-- Note: Gender is NULLABLE because Staff and Admin profiles do NOT require gender.
 ALTER TABLE public.profiles 
-ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT 'boys';
+ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT NULL;
 
 DO $$
 BEGIN
@@ -28,18 +29,23 @@ BEGIN
     ) THEN
         ALTER TABLE public.profiles 
         ADD CONSTRAINT profiles_gender_check 
-        CHECK (gender IN ('boys', 'girls', 'male', 'female'));
+        CHECK (gender IS NULL OR LOWER(gender) IN ('boys', 'girls', 'male', 'female', 'm', 'f'));
     END IF;
 END $$;
 
--- Normalize any NULL or invalid values
+-- Normalize seats gender_group
 UPDATE public.seats 
 SET gender_group = 'boys' 
 WHERE gender_group IS NULL OR gender_group NOT IN ('boys', 'girls');
 
+-- Set default gender ONLY for student profiles if missing, leaving staff/admin gender NULL
 UPDATE public.profiles 
 SET gender = 'boys' 
-WHERE gender IS NULL OR gender NOT IN ('boys', 'girls', 'male', 'female');
+WHERE LOWER(role::text) = 'student' AND (gender IS NULL OR LOWER(gender) NOT IN ('boys', 'girls', 'male', 'female', 'm', 'f'));
+
+UPDATE public.profiles 
+SET gender = NULL 
+WHERE LOWER(role::text) IN ('staff', 'librarian', 'senior_librarian', 'admin', 'super_admin');
 
 -- Index for high-performance seat filtering by gender group
 CREATE INDEX IF NOT EXISTS idx_seats_gender_group ON public.seats(gender_group);
@@ -63,10 +69,10 @@ DECLARE
     v_seat_number TEXT;
     v_active_booking_count INTEGER := 0;
 BEGIN
-    -- Check caller authorization
+    -- Check caller authorization (staff or admin)
     IF v_caller_id IS NOT NULL THEN
         SELECT LOWER(role::text) INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
-        IF v_caller_role NOT IN ('admin', 'super_admin', 'librarian', 'senior_librarian') THEN
+        IF v_caller_role NOT IN ('admin', 'super_admin', 'librarian', 'senior_librarian', 'staff') THEN
             RETURN jsonb_build_object(
                 'success', false,
                 'status_code', 'NOT_AUTHORIZED',
@@ -169,7 +175,7 @@ END;
 $$;
 
 
--- 5. UPDATE create_seat_booking RPC WITH GENDER VALIDATION
+-- 5. UPDATE create_seat_booking RPC WITH ROLE-AWARE STUDENT GENDER VALIDATION
 CREATE OR REPLACE FUNCTION public.create_seat_booking(
     p_library_id UUID,
     p_floor_id UUID,
@@ -213,8 +219,13 @@ BEGIN
         RAISE EXCEPTION 'Account restricted. You cannot book seats at this time.';
     END IF;
 
-    -- Normalize student gender group
-    IF LOWER(COALESCE(v_profile.gender, 'boys')) IN ('female', 'girls', 'girl') THEN
+    -- Verify caller is a STUDENT
+    IF LOWER(COALESCE(v_profile.role::text, 'student')) != 'student' THEN
+        RAISE EXCEPTION 'Only registered student profiles can create online seat bookings.';
+    END IF;
+
+    -- Normalize student gender group (male/boys/m -> boys; female/girls/f -> girls)
+    IF LOWER(COALESCE(v_profile.gender, 'boys')) IN ('female', 'girls', 'girl', 'f') THEN
         v_student_gender_group := 'girls';
     ELSE
         v_student_gender_group := 'boys';
@@ -232,7 +243,7 @@ BEGIN
 
     v_seat_gender_group := LOWER(COALESCE(v_seat.gender_group, 'boys'));
 
-    -- CORE RULE SECURITY ENFORCEMENT: GENDER MATCH CHECK
+    -- CORE RULE SECURITY ENFORCEMENT: GENDER MATCH CHECK FOR STUDENTS
     IF v_seat_gender_group != v_student_gender_group THEN
         RAISE EXCEPTION 'This seat is not allocated to your group.';
     END IF;
@@ -318,7 +329,7 @@ END;
 $$;
 
 
--- 6. UPDATE allocate_walk_in_seat RPC WITH GENDER VALIDATION
+-- 6. UPDATE allocate_walk_in_seat RPC WITH SELECTED CANDIDATE STUDENT GENDER VALIDATION
 CREATE OR REPLACE FUNCTION public.allocate_walk_in_seat(
     p_student_id UUID,
     p_seat_id TEXT,
@@ -353,13 +364,12 @@ DECLARE
     v_booking_id UUID;
     v_student_gender_group TEXT;
     v_seat_gender_group TEXT;
-    v_result JSONB;
 BEGIN
-    -- 1. Validate Authenticated Staff/Librarian User
+    -- 1. Validate Authenticated Staff/Librarian User (Staff profile gender is NULL/ignored!)
     IF v_staff_id IS NULL THEN
         SELECT id, full_name, role, status INTO v_staff_profile 
         FROM public.profiles 
-        WHERE LOWER(role::text) IN ('librarian', 'senior_librarian', 'admin', 'super_admin') 
+        WHERE LOWER(role::text) IN ('librarian', 'senior_librarian', 'admin', 'super_admin', 'staff') 
         LIMIT 1;
         
         IF v_staff_profile.id IS NOT NULL THEN
@@ -377,7 +387,7 @@ BEGIN
         WHERE id = v_staff_id;
     END IF;
 
-    -- 2. Validate Student Profile & Gender Group
+    -- 2. Validate Selected Student Profile & Gender Group (NOT Staff Gender!)
     SELECT * INTO v_student FROM public.profiles WHERE id = p_student_id;
     IF v_student.id IS NULL THEN
         RETURN jsonb_build_object(
@@ -387,7 +397,15 @@ BEGIN
         );
     END IF;
 
-    IF LOWER(v_student.role::text) != 'student' OR COALESCE(v_student.status, 'active') IN ('blocked', 'suspended') THEN
+    IF LOWER(v_student.role::text) != 'student' THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'status_code', 'INVALID_TARGET_ROLE',
+            'message', 'Selected candidate profile must have role = student.'
+        );
+    END IF;
+
+    IF COALESCE(v_student.status, 'active') IN ('blocked', 'suspended') THEN
         RETURN jsonb_build_object(
             'success', false,
             'status_code', 'STUDENT_BLOCKED',
@@ -395,7 +413,8 @@ BEGIN
         );
     END IF;
 
-    IF LOWER(COALESCE(v_student.gender, 'boys')) IN ('female', 'girls', 'girl') THEN
+    -- Read candidate student's gender (male/boys/m -> boys; female/girls/f -> girls)
+    IF LOWER(COALESCE(v_student.gender, 'boys')) IN ('female', 'girls', 'girl', 'f') THEN
         v_student_gender_group := 'girls';
     ELSE
         v_student_gender_group := 'boys';
@@ -417,7 +436,7 @@ BEGIN
     v_target_seat_id := v_seat.id;
     v_seat_gender_group := LOWER(COALESCE(v_seat.gender_group, 'boys'));
 
-    -- CORE RULE SECURITY ENFORCEMENT: WALK-IN GENDER MATCH CHECK
+    -- CORE RULE SECURITY ENFORCEMENT: CANDIDATE STUDENT GENDER vs SEAT GENDER GROUP
     IF v_seat_gender_group != v_student_gender_group THEN
         RETURN jsonb_build_object(
             'success', false,
@@ -532,7 +551,7 @@ END;
 $$;
 
 
--- 7. DATABASE-LEVEL RLS POLICY FOR SEATS: GENDER VISIBILITY ENFORCEMENT
+-- 7. DATABASE-LEVEL RLS POLICY FOR SEATS: GENDER VISIBILITY FOR STUDENTS, UNRESTRICTED FOR STAFF/ADMIN
 DROP POLICY IF EXISTS "Authenticated active users can read seats" ON public.seats;
 DROP POLICY IF EXISTS "Gender filtered seat visibility for active users" ON public.seats;
 
@@ -544,7 +563,7 @@ USING (
         public.is_active_user() AND (
             gender_group IS NULL OR
             LOWER(gender_group) = CASE 
-                WHEN LOWER(COALESCE((SELECT gender FROM public.profiles WHERE id = auth.uid()), 'boys')) IN ('female', 'girls', 'girl') THEN 'girls'
+                WHEN LOWER(COALESCE((SELECT gender FROM public.profiles WHERE id = auth.uid()), 'boys')) IN ('female', 'girls', 'girl', 'f') THEN 'girls'
                 ELSE 'boys'
             END
         )

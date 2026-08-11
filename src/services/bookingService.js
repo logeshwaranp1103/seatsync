@@ -341,13 +341,31 @@ export const bookingService = {
 
   async getSeatsForSlot(floorId, dateStr, slotId, currentUserId = null) {
     try {
-      // Resolve student gender group
+      let isStudent = true;
       let studentGenderGroup = 'boys';
+
       if (currentUserId && isUUID(currentUserId)) {
         try {
-          const { data: prof } = await supabase.from('profiles').select('gender').eq('id', currentUserId).maybeSingle();
-          if (prof?.gender) {
-            studentGenderGroup = ['female', 'girls', 'girl'].includes(String(prof.gender).toLowerCase()) ? 'girls' : 'boys';
+          const { data: prof } = await supabase.from('profiles').select('role, gender').eq('id', currentUserId).maybeSingle();
+          if (prof) {
+            const roleStr = String(prof.role || '').toLowerCase();
+            if (['librarian', 'senior_librarian', 'admin', 'super_admin', 'staff'].includes(roleStr)) {
+              isStudent = false;
+            }
+            if (prof.gender) {
+              studentGenderGroup = ['female', 'girls', 'girl', 'f'].includes(String(prof.gender).toLowerCase()) ? 'girls' : 'boys';
+            }
+          }
+        } catch { /* proceed */ }
+      } else {
+        try {
+          const sessionUser = JSON.parse(localStorage.getItem('seatsync_session') || '{}');
+          const roleStr = String(sessionUser.role || sessionUser.dbRole || '').toLowerCase();
+          if (['librarian', 'staff', 'admin'].includes(roleStr)) {
+            isStudent = false;
+          }
+          if (sessionUser.gender || sessionUser.genderGroup) {
+            studentGenderGroup = ['female', 'girls', 'girl', 'f'].includes(String(sessionUser.gender || sessionUser.genderGroup).toLowerCase()) ? 'girls' : 'boys';
           }
         } catch { /* proceed */ }
       }
@@ -359,12 +377,13 @@ export const bookingService = {
       ]);
 
       if (seats && seats.length > 0) {
-        // Filter ONLY online seats matching the student's gender group (exclude is_walk_in_only seats S-41 to S-50)
+        // Filter ONLY online seats (for students, restrict to matching gender group; for staff/admin, return all)
         const onlineSeats = seats.filter(s => {
           const isWalkIn = s.allocation_mode === 'walk_in_only' || s.is_walk_in_only === true || String(s.seat_number || '').match(/^S-(4[1-9]|50)$/i);
+          if (isWalkIn) return false;
+          if (!isStudent) return true;
           const seatGender = String(s.gender_group || s.genderGroup || 'boys').toLowerCase();
-          const matchesGender = seatGender === studentGenderGroup;
-          return !isWalkIn && matchesGender;
+          return seatGender === studentGenderGroup;
         });
 
         const activeBookings = (bookings || []).filter(b => 
@@ -464,16 +483,22 @@ export const bookingService = {
       };
     });
 
-    // Determine student gender for local fallback filtering
+    // Determine user role and gender for local fallback filtering
+    let isStudentFallback = true;
     let studentGenderGroup = 'boys';
     try {
       const sessionUser = JSON.parse(localStorage.getItem('seatsync_session') || '{}');
+      const roleStr = String(sessionUser.role || sessionUser.dbRole || '').toLowerCase();
+      if (['librarian', 'staff', 'admin'].includes(roleStr)) {
+        isStudentFallback = false;
+      }
       if (sessionUser?.gender || sessionUser?.genderGroup) {
-        studentGenderGroup = ['female', 'girls', 'girl'].includes(String(sessionUser.gender || sessionUser.genderGroup).toLowerCase()) ? 'girls' : 'boys';
+        studentGenderGroup = ['female', 'girls', 'girl', 'f'].includes(String(sessionUser.gender || sessionUser.genderGroup).toLowerCase()) ? 'girls' : 'boys';
       }
     } catch { /* proceed */ }
 
     const filteredSeatsList = seatsList.filter(s => {
+      if (!isStudentFallback) return true; // Staff/Admin see all seats
       const numMatch = String(s.seatNumber || s.id || '').match(/\d+/);
       const num = numMatch ? parseInt(numMatch[0], 10) : 1;
       const seatGender = String(s.gender_group || s.genderGroup || (num <= 20 ? 'boys' : 'girls')).toLowerCase();
