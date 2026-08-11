@@ -1,0 +1,315 @@
+[4:38 pm, 1/8/2026] Logesh: # Project Report
+
+## Smart Library Seat Reservation System
+
+## 1. Introduction
+
+Libraries play a vital role in supporting students' academic activities by providing quiet and comfortable study spaces. However, many libraries still manage seating manually, making it difficult for students to find available seats and for staff to monitor occupancy efficiently. During examination periods, these challenges become even more significant due to increased demand.
+
+The Smart Library Seat Reservation System is a web-based application designed to digitize the seat reservation process. The system allows students to check seat availability, reserve seats online, check in using QR codes, and receive real-time notifications. It also provides library staff and administrators with tools to monitor occupancy, manage reservations, and generate reports.
+
+---
+
+## 2. Problem Statement
+
+The existing library seating system faces several challenges:
+
+* Students cannot check seat availability before visiting the library.
+* Seats are often occupied by personal belongings without the student's presence.
+* Staff manually verify seat occupancy and resolve disputes.
+* Administrators do not have accurate usage statistics.
+* There is no waiting-list mechanism when seats are full.
+* Reservation and occupancy records are maintained manually.
+
+---
+
+## 3. Existing System
+
+The current system is mostly manual. Students physically visit the library to search for available seats. Library staff monitor seat usage by walking around the library, and administrators have limited information about seat utilization and user behavior.
+
+### Limitations
+
+* Time-consuming
+* No online reservation
+* No occupancy verification
+* No analytics
+* Inefficient seat utilization
+* Increased staff workload
+
+---
+
+## 4. Proposed System
+
+The proposed Smart Library Seat Reservation System provides an online platform that automates the entire seat reservation process.
+
+The system enables:
+
+* Online seat reservation
+* Real-time seat availability
+* Interactive library seat map
+* QR code-based check-in and check-out
+* Waiting list management
+* Automatic reservation updates
+* Notification system
+* Dashboard for staff and administrators
+* Reports and analytics
+
+---
+
+## 5. Objectives
+
+The objectives of the project are:
+
+* Digitize the seat reservation process.
+* Reduce manual work.
+* Improve seat utilization.
+* Prevent seat hoarding.
+* Provide fair access to library seats.
+* Improve user experience.
+* Generate useful reports for administrators.
+
+---
+
+## 6. Modules
+
+### Student Module
+
+Students can:
+
+* Login securely
+* View available seats
+* Reserve seats
+* View reservation history
+* Generate QR codes
+* Check in and check out
+* Receive notifications
+
+### Library Staff Module
+
+Library staff can:
+
+* Monitor occupancy
+* Verify QR codes
+* Search reservations
+* Block seats
+* Mark seats under maintenance
+* Handle late arrivals
+
+### Administrator Module
+
+Administrators can:
+
+* Manage users
+* Manage floors and seats
+* Configure reservation rules
+* View reports
+* Manage notifications
+* View audit logs
+
+---
+
+## 7. Technology Stack
+
+Frontend:
+
+* React
+* TypeScript
+* Tailwind CSS
+* Vite
+
+Backend:
+
+* Node.js (future implementation)
+
+Database:
+
+* MySQL or PostgreSQL (future implementation)
+
+---
+
+## 8. Expected Results
+
+The system is expected to:
+
+* Reduce manual work
+* Improve transparency
+* Increase seat utilization
+* Save students' time
+* Improve library management
+* Provide accurate occupancy data
+
+---
+
+## 9. Future Enhancements
+
+* Mobile application
+* AI-based seat recommendation
+* IoT occupancy sensors
+* Indoor navigation
+* Multi-campus support
+
+---
+
+## 10. Conclusion
+
+The Smart Library Seat Reservation System modernizes traditional library seat management by providing an automated and user-friendly platform. The system improves efficiency, reduces manual work, prevents seat misuse, and enhances the overall experience for students, library staff, and administrators.
+[4:38 pm, 1/8/2026] Logesh: # Software Requirements Specification (SRS)
+
+## Smart Library Seat Reservation System
+
+## 1. Introduction
+
+### Purpose
+
+The purpose of this Software Requirements Specification (SRS) is to define the functional and non-functional requirements of the Smart Library Seat Reservation System. The document serves as a reference for designing, developing, testing, and maintaining the application.
+
+---
+
+## 2. Scope
+
+The system provides an online platform for library seat reservation with role-based access for students, library staff, and administrators. It supports reservation management, occupancy monitoring, QR code verification, notifications, and reporting.
+
+---
+
+## 3. User Roles
+
+### Student/User
+
+* Login
+* Reserve seats
+* View seat availability
+* Generate QR codes
+* View reservation history
+* Join waiting list
+
+### Library Staff
+
+* Monitor occupancy
+* Verify QR codes
+* Manage reservations
+* Block seats
+* Search bookings
+
+### Administrator
+
+* Manage users
+* Manage library layout
+* Configure reservation policies
+* Generate reports
+* View audit logs
+
+---
+
+## 4. Functional Requirements
+
+### Authentication
+
+The system shall:
+
+* Allow login and logout.
+* Verify users using college ID or register number.
+* Support password reset.
+* Provide role-based access control.
+
+### Seat Reservation
+
+The system shall:
+
+* Display real-time seat availability.
+* Show an interactive seat map.
+* Allow seat reservation.
+* Prevent double booking.
+* Generate QR codes.
+* Support reservation cancellation.
+
+### Reservation Automation
+
+The system shall:
+
+* Automatically cancel expired reservations.
+* Release seats after reservation completion.
+* Update seat status automatically.
+* Allocate available seats to waiting-list users.
+
+### Notifications
+
+The system shall notify users about:
+
+* Reservation confirmation
+* Upcoming reservations
+* Check-in reminders
+* Cancellation
+* Waiting-list availability
+* Maintenance announcements
+
+### Administration
+
+Administrators shall:
+
+* Manage users
+* Manage floors and seats
+* Configure reservation rules
+* Generate reports
+* Monitor audit logs
+
+---
+
+## 5. Non-Functional Requirements
+
+### Performance
+
+* Fast response time
+* Real-time updates
+* Support multiple users
+
+### Security
+
+* Secure authentication
+* Role-based authorization
+* Protected sessions
+
+### Reliability
+
+* Accurate reservation records
+* Consistent seat status
+* Reliable notification delivery
+
+### Usability
+
+* Responsive interface
+* Easy navigation
+* User-friendly design
+
+### Scalability
+
+The system should support additional users, seats, and library branches without affecting performance.
+
+---
+
+## 6. System Constraints
+
+* Users must have valid institutional credentials.
+* Seats can only be reserved if available.
+* QR codes are unique for each reservation.
+* Only authorized staff can verify reservations.
+
+---
+
+## 7. Assumptions
+
+* Internet connectivity is available.
+* Library seating data is maintained by administrators.
+* Users have access to their college credentials.
+
+---
+
+## 8. Expected Outcomes
+
+The system will:
+
+* Improve seat utilization.
+* Reduce manual work.
+* Prevent seat hoarding.
+* Increase transparency.
+* Improve student satisfaction.
+* Provide accurate reports for administrators.

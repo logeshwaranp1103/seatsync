@@ -1,0 +1,15 @@
+DEBUG SQUAD
+
+#Team109
+
+Smart Library Seat Reservation System
+
+1.	LOGESHWARAN P   -   7376252AD226 logeshwaranp.ad25@bitsathy.ac.in 
+
+2.	SUBASH P                    -   7376252AD344
+subashp.ad25@bitsathy.ac.in
+
+3.	MONISH E                    -   7376252AD244
+monishe.ad25@bitsathy.ac.in
+
+
