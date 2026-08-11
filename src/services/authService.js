@@ -480,34 +480,17 @@ export const authService = {
     return sessionUser;
   },
 
-  async registerStudent({ fullName, registrationNumber, department, yearOfStudy, email, password }) {
+  async registerStudent({ fullName, registrationNumber, department, yearOfStudy, gender = 'male', email, password }) {
     const cleanEmail = email.trim().toLowerCase();
     const cleanRegNo = registrationNumber.trim();
+    const cleanGender = ['female', 'girl', 'girls'].includes(String(gender).toLowerCase()) ? 'female' : 'male';
 
     if (!fullName || !fullName.trim()) throw new Error('Full Name is required.');
     if (!cleanRegNo) throw new Error('Registration Number is required.');
     if (!cleanEmail || !cleanEmail.includes('@')) throw new Error('Valid college email is required.');
     if (!password || password.length < 6) throw new Error('Password must be at least 6 characters.');
 
-    // Save to local storage database (forced to STUDENT role)
-    let localUser = null;
-    try {
-      localUser = await this._saveToLocalUser({
-        fullName: fullName.trim(),
-        registrationNumber: cleanRegNo,
-        department,
-        yearOfStudy,
-        email: cleanEmail,
-        password
-      });
-    } catch (localErr) {
-      if (localErr.message && localErr.message.includes('already exists')) {
-        throw localErr;
-      }
-      console.warn('Local user save warning:', localErr);
-    }
-
-    // Supabase Auth sign up (Strictly non-privileged metadata)
+    // Supabase Auth sign up
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: cleanEmail,
       password,
@@ -516,8 +499,8 @@ export const authService = {
           full_name: fullName.trim(),
           registration_number: cleanRegNo,
           department,
-          year_of_study: Number(yearOfStudy)
-          // No role parameter passed: DB trigger defaults strictly to student
+          year_of_study: Number(yearOfStudy),
+          gender: cleanGender
         }
       }
     });
@@ -529,7 +512,16 @@ export const authService = {
       }
     }
 
-    return localUser || { user: authData?.user, email: cleanEmail, name: fullName };
+    const userId = authData?.user?.id;
+    if (userId && isUUID(userId)) {
+      await supabase
+        .from('profiles')
+        .update({ gender: cleanGender })
+        .eq('id', userId)
+        .catch(() => {});
+    }
+
+    return { user: authData?.user, email: cleanEmail, name: fullName, gender: cleanGender };
   },
 
   async requestPasswordReset(identifier) {

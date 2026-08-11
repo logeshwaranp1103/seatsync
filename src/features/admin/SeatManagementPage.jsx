@@ -4,13 +4,13 @@ import { librarianService } from '../../services/librarianService';
 import { adminService } from '../../services/adminService';
 import { useSync } from '../../hooks/useSync';
 import { db } from '../../services/mockDatabase';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/shared/Card';
+import { Card, CardContent } from '../../components/shared/Card';
 import { Button } from '../../components/shared/Button';
 import { Input } from '../../components/shared/Input';
 import { Label } from '../../components/shared/Label';
 import { Badge } from '../../components/shared/Badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/shared/Dialog';
-import { Armchair, Plus, Search, RefreshCw, Zap, Sun, Users, ShieldAlert, Layers } from 'lucide-react';
+import { Armchair, Plus, Search, RefreshCw, Zap, Sun, Layers } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function SeatManagementPage() {
@@ -21,11 +21,22 @@ export default function SeatManagementPage() {
 
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
-  
+  const [creationMode, setCreationMode] = useState('single'); // 'single' | 'bulk'
+
   const [newSeat, setNewSeat] = useState({
     seatNumber: '',
     zoneId: 'zone-a',
     genderGroup: 'boys',
+    powerOutlet: true,
+    nearWindow: false
+  });
+
+  const [bulkSeat, setBulkSeat] = useState({
+    prefix: 'S-',
+    startNum: 21,
+    endNum: 40,
+    genderGroup: 'girls',
+    zoneId: 'zone-a',
     powerOutlet: true,
     nearWindow: false
   });
@@ -36,15 +47,23 @@ export default function SeatManagementPage() {
     targetGenderGroup: 'boys'
   });
 
+  const DEFAULT_ROOM_ID = 'c1eebc99-9c0b-4ef8-bb6d-6bb9bd380a44';
+
   const fetchSeats = async () => {
     try {
       setLoading(true);
+
       const { data, error } = await supabase.from('seats').select('*').order('seat_number');
-      if (!error && data && data.length > 0) {
+      if (error) {
+        toast.error(`Database error: ${error.message}`);
+        return;
+      }
+
+      if (data && data.length > 0) {
         setSeats(data.map(s => {
           const numMatch = String(s.seat_number || '').match(/\d+/);
           const num = numMatch ? parseInt(numMatch[0], 10) : 1;
-          const gGroup = String(s.gender_group || s.genderGroup || (num <= 20 ? 'boys' : 'girls')).toLowerCase();
+          const gGroup = s.gender_group ? String(s.gender_group).toLowerCase() : (num <= 20 ? 'boys' : 'girls');
           return {
             id: s.id,
             seatNumber: s.seat_number,
@@ -56,22 +75,11 @@ export default function SeatManagementPage() {
             status: s.status === 'available' ? 'active' : s.status
           };
         }));
-        return;
+      } else {
+        setSeats([]);
       }
-    } catch { /* fallback */ }
-
-    try {
-      const data = (await db.read('seatsync_seats')) || [];
-      setSeats(data.map((s, idx) => {
-        const num = idx + 1;
-        const gGroup = String(s.gender_group || s.genderGroup || (num <= 20 ? 'boys' : 'girls')).toLowerCase();
-        return {
-          ...s,
-          genderGroup: gGroup
-        };
-      }));
-    } catch {
-      toast.error('Failed to load seats.');
+    } catch (err) {
+      toast.error(`Failed to fetch seats from database: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -81,66 +89,105 @@ export default function SeatManagementPage() {
     fetchSeats();
   }, []);
 
-  useSync(['seats', 'seatsync_seats'], fetchSeats);
+  useSync(['seats'], fetchSeats);
 
   const handleAddSeat = async (e) => {
     e.preventDefault();
-    if (!newSeat.seatNumber.trim()) {
-      toast.error('Please enter Seat Number.');
-      return;
-    }
 
     try {
-      const { data: roomData } = await supabase.from('rooms').select('id').limit(1).single();
-      if (roomData) {
-        const { error } = await supabase.from('seats').insert({
-          room_id: roomData.id,
-          seat_number: newSeat.seatNumber.trim(),
+      let roomId = DEFAULT_ROOM_ID;
+      const { data: existingRoom } = await supabase.from('rooms').select('id').limit(1).maybeSingle();
+      if (existingRoom && existingRoom.id) {
+        roomId = existingRoom.id;
+      }
+
+      if (creationMode === 'single') {
+        const seatNumStr = newSeat.seatNumber.trim();
+        if (!seatNumStr) {
+          toast.error('Please enter Seat Number.');
+          return;
+        }
+
+        const { error: insertErr } = await supabase.from('seats').insert({
+          room_id: roomId,
+          seat_number: seatNumStr,
           seat_type: newSeat.zoneId === 'zone-a' ? 'Quiet Study' : 'Group Discussion',
           gender_group: newSeat.genderGroup,
           has_power_socket: newSeat.powerOutlet,
           is_accessible: newSeat.nearWindow,
           status: 'available'
         });
-        if (!error) {
-          toast.success(`Seat ${newSeat.seatNumber.trim()} added successfully!`);
-          setAddModalOpen(false);
-          setNewSeat({ seatNumber: '', zoneId: 'zone-a', genderGroup: 'boys', powerOutlet: true, nearWindow: false });
-          fetchSeats();
+
+        if (insertErr) {
+          toast.error(`Failed to store seat in database: ${insertErr.message}`);
           return;
         }
+
+        toast.success(`Seat ${seatNumStr} saved directly to Supabase database!`);
+      } else {
+        // BULK SEAT CREATION
+        const start = Math.min(bulkSeat.startNum, bulkSeat.endNum);
+        const end = Math.max(bulkSeat.startNum, bulkSeat.endNum);
+        const prefix = bulkSeat.prefix.trim() || 'S-';
+        const targetGroup = bulkSeat.genderGroup;
+
+        const { data: existingSeats } = await supabase.from('seats').select('seat_number');
+        const existingSet = new Set((existingSeats || []).map(s => String(s.seat_number || '').toUpperCase()));
+
+        const seatsToCreate = [];
+        const skippedSeats = [];
+
+        for (let i = start; i <= end; i++) {
+          const seatNo = `${prefix}${String(i).padStart(2, '0')}`;
+          if (existingSet.has(seatNo.toUpperCase())) {
+            skippedSeats.push(seatNo);
+          } else {
+            seatsToCreate.push({
+              room_id: roomId,
+              seat_number: seatNo,
+              seat_type: bulkSeat.zoneId === 'zone-a' ? 'Quiet Study' : 'Group Discussion',
+              gender_group: targetGroup,
+              has_power_socket: bulkSeat.powerOutlet,
+              is_accessible: bulkSeat.nearWindow,
+              status: 'available'
+            });
+          }
+        }
+
+        if (seatsToCreate.length === 0) {
+          toast.error(`All seats in range ${prefix}${start} to ${prefix}${end} already exist in database.`);
+          return;
+        }
+
+        const { data: inserted, error: bulkErr } = await supabase
+          .from('seats')
+          .insert(seatsToCreate)
+          .select();
+
+        if (bulkErr) {
+          toast.error(`Database Bulk Creation Error: ${bulkErr.message}`);
+          return;
+        }
+
+        const createdCount = inserted ? inserted.length : seatsToCreate.length;
+        toast.success(`Successfully created ${createdCount} new ${targetGroup.toUpperCase()} seats (${prefix}${start} to ${prefix}${end}) in database!${skippedSeats.length > 0 ? ` (${skippedSeats.length} already existed)` : ''}`);
       }
-    } catch { /* fallback */ }
 
-    try {
-      const data = (await db.read('seatsync_seats')) || [];
-      const created = {
-        id: `SEAT-${Date.now()}`,
-        seatNumber: newSeat.seatNumber.trim(),
-        floorId: 'floor-g',
-        zoneId: newSeat.zoneId,
-        gender_group: newSeat.genderGroup,
-        genderGroup: newSeat.genderGroup,
-        type: newSeat.zoneId === 'zone-a' ? 'Quiet Study' : 'Group Discussion',
-        status: 'active',
-        powerOutlet: newSeat.powerOutlet,
-        nearWindow: newSeat.nearWindow
-      };
-
-      data.push(created);
-      await db.write('seatsync_seats', data);
-      toast.success(`Seat ${created.seatNumber} added successfully!`);
       setAddModalOpen(false);
       setNewSeat({ seatNumber: '', zoneId: 'zone-a', genderGroup: 'boys', powerOutlet: true, nearWindow: false });
       fetchSeats();
-    } catch {
-      toast.error('Failed to add seat.');
+    } catch (err) {
+      toast.error(`Database error: ${err.message}`);
     }
   };
 
   const handleUpdateSeatGroup = async (seat, newGroup) => {
     try {
       await adminService.updateSeatGenderGroup(seat.id, newGroup);
+      
+      // Update local state immediately
+      setSeats(prev => prev.map(s => s.id === seat.id ? { ...s, genderGroup: newGroup } : s));
+
       toast.success(`Seat ${seat.seatNumber} group updated to ${newGroup.toUpperCase()}!`);
       fetchSeats();
     } catch (err) {
@@ -154,27 +201,14 @@ export default function SeatManagementPage() {
     const end = Math.max(bulkRange.startNumber, bulkRange.endNumber);
     const targetGroup = bulkRange.targetGenderGroup;
 
-    const targetSeats = seats.filter(s => {
-      const numMatch = String(s.seatNumber || s.id || '').match(/\d+/);
-      const num = numMatch ? parseInt(numMatch[0], 10) : 0;
-      return num >= start && num <= end;
-    });
-
-    if (targetSeats.length === 0) {
-      toast.error(`No seats found in range S-${String(start).padStart(2, '0')} to S-${String(end).padStart(2, '0')}.`);
-      return;
-    }
-
     try {
-      const res = await adminService.bulkUpdateSeatGenderGroup(
-        targetSeats.map(s => s.id),
-        targetGroup
-      );
-      toast.success(res.message || `Bulk updated seats S-${start} through S-${end} to ${targetGroup.toUpperCase()}.`);
+      const res = await adminService.bulkAllocateOrUpdateSeatRange(start, end, targetGroup);
+
+      toast.success(res.message || `Bulk allocation complete for seats S-${start} to S-${end}.`);
       setBulkModalOpen(false);
       fetchSeats();
     } catch (err) {
-      toast.error(err.message || 'Failed to complete bulk seat group update.');
+      toast.error(err.message || 'Failed to complete bulk seat allocation.');
     }
   };
 
@@ -239,7 +273,7 @@ export default function SeatManagementPage() {
             <RefreshCw size={14} className="mr-1.5" /> Refresh Inventory
           </Button>
           <Button onClick={() => setAddModalOpen(true)} className="bg-brandBlue hover:bg-blue-700 text-white font-bold text-xs rounded-xl h-9">
-            <Plus size={16} className="mr-1.5" /> Add New Seat
+            <Plus size={16} className="mr-1.5" /> Add New Seat / Bulk Seats
           </Button>
         </div>
       </div>
@@ -399,33 +433,105 @@ export default function SeatManagementPage() {
         </CardContent>
       </Card>
 
-      {/* ADD NEW SEAT MODAL */}
+      {/* ADD NEW SEAT / BULK CREATE SEATS MODAL */}
       <Dialog open={addModalOpen} onOpenChange={setAddModalOpen}>
         <DialogContent className="sm:max-w-md rounded-2xl p-6 bg-white text-navy">
           <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-navy">Add New Study Seat</DialogTitle>
+            <DialogTitle className="text-lg font-bold text-navy flex items-center gap-2">
+              <Armchair className="text-brandBlue" size={22} /> Add Study Seats
+            </DialogTitle>
             <DialogDescription className="text-xs text-slate-500 pt-1">
-              Add a new seat and assign its permitted student gender group.
+              Create a single seat or bulk generate a range of seats assigned to a gender group.
             </DialogDescription>
           </DialogHeader>
 
+          {/* MODE TOGGLE SWITCH */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1 border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setCreationMode('single')}
+              className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                creationMode === 'single' ? 'bg-white text-navy shadow-xs border border-slate-200' : 'text-slate-500 hover:text-navy'
+              }`}
+            >
+              Single Seat
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreationMode('bulk')}
+              className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                creationMode === 'bulk' ? 'bg-brandBlue text-white shadow-xs' : 'text-slate-500 hover:text-navy'
+              }`}
+            >
+              <Layers size={13} className="inline mr-1" /> Bulk Create (Range)
+            </button>
+          </div>
+
           <form onSubmit={handleAddSeat} className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-slate-700">Seat Number / Code</Label>
-              <Input
-                placeholder="e.g. S-51"
-                value={newSeat.seatNumber}
-                onChange={(e) => setNewSeat({ ...newSeat, seatNumber: e.target.value })}
-                className="h-10 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
-                required
-              />
-            </div>
+            {creationMode === 'single' ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-700">Seat Number / Code</Label>
+                <Input
+                  placeholder="e.g. S-51"
+                  value={newSeat.seatNumber}
+                  onChange={(e) => setNewSeat({ ...newSeat, seatNumber: e.target.value })}
+                  className="h-10 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
+                  required
+                />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-bold text-slate-700">Prefix</Label>
+                    <Input
+                      placeholder="S-"
+                      value={bulkSeat.prefix}
+                      onChange={(e) => setBulkSeat({ ...bulkSeat, prefix: e.target.value })}
+                      className="h-9 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-bold text-slate-700">Start No.</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="500"
+                      value={bulkSeat.startNum}
+                      onChange={(e) => setBulkSeat({ ...bulkSeat, startNum: parseInt(e.target.value, 10) || 1 })}
+                      className="h-9 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-bold text-slate-700">End No.</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="500"
+                      value={bulkSeat.endNum}
+                      onChange={(e) => setBulkSeat({ ...bulkSeat, endNum: parseInt(e.target.value, 10) || 1 })}
+                      className="h-9 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-[11px] text-blue-900 font-medium">
+                  Will create up to <span className="font-bold">{Math.max(0, bulkSeat.endNum - bulkSeat.startNum + 1)}</span> seats: <span className="font-mono font-bold">{bulkSeat.prefix}{String(bulkSeat.startNum).padStart(2, '0')}</span> to <span className="font-mono font-bold">{bulkSeat.prefix}{String(bulkSeat.endNum).padStart(2, '0')}</span>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <Label className="text-xs font-bold text-slate-700">Allocated Gender Group</Label>
               <select
-                value={newSeat.genderGroup}
-                onChange={(e) => setNewSeat({ ...newSeat, genderGroup: e.target.value })}
+                value={creationMode === 'single' ? newSeat.genderGroup : bulkSeat.genderGroup}
+                onChange={(e) => {
+                  if (creationMode === 'single') setNewSeat({ ...newSeat, genderGroup: e.target.value });
+                  else setBulkSeat({ ...bulkSeat, genderGroup: e.target.value });
+                }}
                 className="w-full h-10 rounded-xl border border-slate-300 px-3 text-xs font-bold bg-slate-50 text-navy"
               >
                 <option value="boys">BOYS SEATS</option>
@@ -436,8 +542,11 @@ export default function SeatManagementPage() {
             <div className="space-y-1.5">
               <Label className="text-xs font-bold text-slate-700">Zone Type</Label>
               <select
-                value={newSeat.zoneId}
-                onChange={(e) => setNewSeat({ ...newSeat, zoneId: e.target.value })}
+                value={creationMode === 'single' ? newSeat.zoneId : bulkSeat.zoneId}
+                onChange={(e) => {
+                  if (creationMode === 'single') setNewSeat({ ...newSeat, zoneId: e.target.value });
+                  else setBulkSeat({ ...bulkSeat, zoneId: e.target.value });
+                }}
                 className="w-full h-10 rounded-xl border border-slate-300 px-3 text-xs font-semibold bg-slate-50 text-navy"
               >
                 <option value="zone-a">Zone A — Quiet Study</option>
@@ -450,7 +559,7 @@ export default function SeatManagementPage() {
                 Cancel
               </Button>
               <Button type="submit" className="bg-brandBlue hover:bg-blue-700 text-white font-bold rounded-xl text-xs">
-                Create Seat
+                {creationMode === 'single' ? 'Create Seat' : `Bulk Create ${Math.max(0, bulkSeat.endNum - bulkSeat.startNum + 1)} Seats`}
               </Button>
             </div>
           </form>
@@ -465,7 +574,7 @@ export default function SeatManagementPage() {
               <Layers className="text-brandBlue" size={20} /> Bulk Seat Group Allocation
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500 pt-1">
-              Assign a range of seats to Boys or Girls group in one bulk action. Active allocations will be safely preserved and skipped.
+              Assign a range of seats to Boys or Girls group in one bulk action. Missing seats in the range will be automatically created in the database.
             </DialogDescription>
           </DialogHeader>
 
@@ -476,7 +585,7 @@ export default function SeatManagementPage() {
                 <Input
                   type="number"
                   min="1"
-                  max="100"
+                  max="500"
                   value={bulkRange.startNumber}
                   onChange={(e) => setBulkRange({ ...bulkRange, startNumber: parseInt(e.target.value, 10) || 1 })}
                   className="h-10 text-xs font-bold bg-slate-50 border-slate-300 text-navy"
@@ -489,7 +598,7 @@ export default function SeatManagementPage() {
                 <Input
                   type="number"
                   min="1"
-                  max="100"
+                  max="500"
                   value={bulkRange.endNumber}
                   onChange={(e) => setBulkRange({ ...bulkRange, endNumber: parseInt(e.target.value, 10) || 1 })}
                   className="h-10 text-xs font-bold bg-slate-50 border-slate-300 text-navy"

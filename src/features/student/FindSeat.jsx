@@ -59,9 +59,9 @@ export default function FindSeat() {
     try {
       setLoadingSlots(true);
       setSlotsError(null);
-      const [floorsData, studentSlots] = await Promise.all([
+      const [floorsData, availableSlots] = await Promise.all([
         bookingService.getFloors(),
-        slotService.getStudentSlots({ bookingDate: tomorrowDate })
+        bookingService.getSlotsAvailability(tomorrowDate, user?.id)
       ]);
 
       setFloors(floorsData || []);
@@ -69,48 +69,19 @@ export default function FindSeat() {
         setSelectedFloor(floorsData[0]);
       }
 
-      let mappedSlots = [];
-      if (studentSlots && studentSlots.length > 0) {
-        mappedSlots = studentSlots.map(s => ({
-          id: s.slot_id,
-          slot_occurrence_id: s.slot_occurrence_id,
-          name: s.slot_name,
-          label: s.slot_name,
-          startTime: s.start_time,
-          endTime: s.end_time,
-          effectiveStatus: s.effective_status,
-          isBookingEnabled: s.is_booking_enabled,
-          disabledReason: s.disabled_reason,
-          disabledByName: s.disabled_by_name,
-          hasStudentBooking: Boolean(s.has_student_booking || s.current_student_has_reservation),
-          studentBookingStatus: s.student_booking_status || s.current_student_booking_status,
-          studentBookingId: s.student_booking_id || s.current_student_booking_id,
-          studentWaitlistPosition: s.student_waitlist_position || s.current_student_waitlist_position,
-          physicalTotalSeats: s.physical_total_seats !== undefined ? s.physical_total_seats : 40,
-          operationalSeats: s.operational_seats !== undefined ? s.operational_seats : 40,
-          reservedSeats: s.reserved_seats || 0,
-          availableCount: s.available_seats !== undefined ? s.available_seats : (s.is_booking_enabled ? 40 : 0),
-          maintenanceSeats: s.maintenance_seats || 0,
-          blockedSeats: s.blocked_seats || 0,
-          waitlistCount: s.waitlist_count || 0
-        }));
-      } else {
-        // Fallback default slots availability calculation from database records
-        const availableSlots = await bookingService.getSlotsAvailability(tomorrowDate, user?.id);
-        mappedSlots = availableSlots.map(s => ({
-          ...s,
-          effectiveStatus: s.isDisabledByAdmin ? 'cancelled' : 'active',
-          isBookingEnabled: !s.isDisabledByAdmin,
-          hasStudentBooking: s.isBookedByStudent,
-          physicalTotalSeats: s.physicalTotalSeats || 40,
-          operationalSeats: s.operationalSeats || 40,
-          reservedSeats: s.reservedSeats || 0,
-          availableCount: s.availableCount !== undefined ? s.availableCount : 0,
-          maintenanceSeats: s.maintenanceSeats || 0,
-          blockedSeats: s.blockedSeats || 0,
-          waitlistCount: 0
-        }));
-      }
+      const mappedSlots = (availableSlots || []).map(s => ({
+        ...s,
+        effectiveStatus: s.isDisabledByAdmin ? 'cancelled' : 'active',
+        isBookingEnabled: !s.isDisabledByAdmin,
+        hasStudentBooking: s.isBookedByStudent,
+        physicalTotalSeats: s.physicalTotalSeats ?? 0,
+        operationalSeats: s.operationalSeats ?? 0,
+        reservedSeats: s.reservedSeats || 0,
+        availableCount: s.availableCount ?? 0,
+        maintenanceSeats: s.maintenanceSeats || 0,
+        blockedSeats: s.blockedSeats || 0,
+        waitlistCount: 0
+      }));
 
       const sorted = sortSlotsChronologically(mappedSlots);
       setSlots(sorted);

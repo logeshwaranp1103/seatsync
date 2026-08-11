@@ -16,6 +16,7 @@ export default function StudentSignUpPage() {
     registrationNumber: '',
     department: 'Computer Science & Engineering',
     yearOfStudy: '2',
+    gender: 'boy', // 'boy' | 'girl'
     email: '',
     password: '',
     confirmPassword: ''
@@ -35,6 +36,7 @@ export default function StudentSignUpPage() {
     if (!form.fullName.trim()) return setErrorMsg('Full Name is required.');
     if (!form.registrationNumber.trim()) return setErrorMsg('Registration Number is required.');
     if (!form.email.trim() || !form.email.includes('@')) return setErrorMsg('Valid college email is required.');
+    if (!form.gender) return setErrorMsg('Please select your gender (Boy or Girl).');
     if (form.password.length < 6) return setErrorMsg('Password must be at least 6 characters.');
     if (form.password !== form.confirmPassword) return setErrorMsg('Passwords do not match.');
 
@@ -45,6 +47,7 @@ export default function StudentSignUpPage() {
         registrationNumber: form.registrationNumber.trim(),
         department: form.department,
         yearOfStudy: Number(form.yearOfStudy),
+        gender: form.gender === 'girl' ? 'female' : 'male',
         email: form.email.trim(),
         password: form.password
       });
@@ -110,6 +113,35 @@ export default function StudentSignUpPage() {
               />
             </div>
 
+            {/* GENDER SELECTION (MANDATORY FOR STUDENTS) */}
+            <div className="space-y-1">
+              <Label className="text-xs font-bold text-slate-700">Gender (Required for Seat Allocation)</Label>
+              <div className="grid grid-cols-2 gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, gender: 'boy' })}
+                  className={`h-10 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition-all ${
+                    form.gender === 'boy'
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  👦 Boy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, gender: 'girl' })}
+                  className={`h-10 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition-all ${
+                    form.gender === 'girl'
+                      ? 'bg-pink-600 text-white border-pink-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  👧 Girl
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs font-bold text-slate-700">Department</Label>
@@ -168,7 +200,6 @@ export default function StudentSignUpPage() {
             <PasswordField
               id="confirmPassword"
               label="Confirm Password"
-              placeholder="Re-enter password"
               value={form.confirmPassword}
               onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
               disabled={loading}
@@ -178,15 +209,21 @@ export default function StudentSignUpPage() {
             <Button
               type="submit"
               disabled={loading}
-              className="w-full h-11 text-xs font-bold bg-brandBlue hover:bg-blue-700 text-white rounded-xl shadow-md mt-2"
+              className="w-full h-11 bg-brandBlue hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-lg shadow-brandBlue/20 mt-2"
             >
-              {loading ? 'Creating Account...' : 'Complete Registration →'}
+              {loading ? (
+                <span className="flex items-center gap-2">Creating Account...</span>
+              ) : (
+                <span className="flex items-center justify-center gap-2">
+                  Complete Registration <ArrowRight size={16} />
+                </span>
+              )}
             </Button>
           </form>
 
-          <div className="text-center border-t border-slate-100 pt-3">
+          <div className="text-center pt-2 border-t border-slate-100">
             <p className="text-xs text-slate-500 font-medium">
-              Already have an account?{' '}
+              Already have a student account?{' '}
               <Link to="/login" className="text-brandBlue font-bold hover:underline">
                 Sign In
               </Link>

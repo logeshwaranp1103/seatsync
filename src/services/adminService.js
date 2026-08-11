@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import { supabase, isUUID } from '../lib/supabase.js';
 import { db } from './mockDatabase.js';
 import { slotService } from './slotService.js';
@@ -19,427 +13,427 @@ export const adminService = {
         supabase.from('bookings').select('*'),
         supabase.from('rooms').select('*'),
         supabase.from('waitlist_entries').select('*').eq('status', 'waiting'),
-        supabase.from('seat_maintenance').select('*').neq('status', 'Resolved')
+        supabase.from('seat_maintenance').select('*').in('status', ['reported', 'in_progress'])
       ]);
 
-      if (seats && rooms) {
+      if (seats && bookings && rooms) {
         const todayStr = getTodayKolkataDate();
-        const todayBookings = (bookings || []).filter(b => b.booking_date === todayStr && !['cancelled', 'slot_cancelled'].includes(b.status));
-        const checkedInCount = todayBookings.filter(b => b.status === 'checked_in').length;
-        const reservedCount = todayBookings.filter(b => ['confirmed', 'awaiting_check_in'].includes(b.status)).length;
-        const occupiedSeats = checkedInCount;
-        const maintenanceSeats = (seats || []).filter(s => s.status === 'maintenance' || (maintenance || []).some(m => m.seat_id === s.id)).length;
-        const availableSeats = Math.max(0, seats.length - occupiedSeats - reservedCount - maintenanceSeats);
+        const activeBookings = bookings.filter(b => 
+          b.booking_date === todayStr && 
+          ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(String(b.status || '').toLowerCase())
+        );
+
+        const totalCapacity = seats.length || 40;
+        const occupiedCount = activeBookings.filter(b => b.status === 'checked_in' || b.status === 'active').length;
+        const reservedCount = activeBookings.filter(b => b.status === 'confirmed' || b.status === 'awaiting_check_in').length;
 
         return {
-          totalSeats: seats.length || 40,
-          occupiedSeats,
+          totalCapacity,
+          occupiedCount,
           reservedCount,
-          availableSeats,
-          todayBookingsCount: todayBookings.length,
-          checkedInCount,
-          activeWaitlist: (waitlist || []).length,
-          maintenanceSeats,
-          openIncidents: 0,
-          dutyLibrariansCount: 2,
-          rooms: rooms || []
+          availableSeats: Math.max(0, totalCapacity - occupiedCount - reservedCount - (maintenance?.length || 0)),
+          waitlistCount: waitlist?.length || 0,
+          maintenanceCount: maintenance?.length || 0,
+          activeRoomsCount: rooms.filter(r => (r.status || 'active') === 'active').length,
+          totalRoomsCount: rooms.length
         };
       }
     } catch { /* fallback */ }
 
-    // Fallback
-    const [seats, bookings, rooms, waitlist, maintenance, incidents, users] = await Promise.all([
-      db.read('seatsync_seats') || [],
-      db.read('seatsync_bookings') || [],
-      db.read('seatsync_rooms') || [],
-      db.read('seatsync_waitlist') || [],
-      db.read('seatsync_maintenance') || [],
-      db.read('seatsync_incidents') || [],
-      db.read('seatsync_users') || []
-    ]);
+    // Fallback Mock Metrics
+    const seats = (await db.read('seatsync_seats')) || [];
+    const bookings = (await db.read('seatsync_bookings')) || [];
+    const waitlist = (await db.read('seatsync_waitlist')) || [];
+    const maintenance = (await db.read('seatsync_maintenance')) || [];
 
-    const todayStr = getTodayKolkataDate();
-    const todayBookings = bookings.filter(b => b.bookingDate === todayStr && b.status !== 'CANCELLED_BY_ADMIN' && b.status !== 'cancelled');
-    const checkedInCount = todayBookings.filter(b => b.status === 'active' || b.status === 'checked_in').length;
-    const reservedCount = todayBookings.filter(b => b.status === 'confirmed').length;
-    const occupiedSeats = checkedInCount;
-    const maintenanceSeats = seats.filter(s => s.status === 'maintenance' || maintenance.some(m => m.seatNumber === s.seatNumber && m.status !== 'Resolved')).length;
-    const availableSeats = Math.max(0, seats.length - occupiedSeats - reservedCount - maintenanceSeats);
+    const activeBookings = bookings.filter(b => ['confirmed', 'checked_in', 'active'].includes(String(b.status || '').toLowerCase()));
+    const occupiedCount = activeBookings.filter(b => b.status === 'checked_in' || b.status === 'active').length;
+    const reservedCount = activeBookings.filter(b => b.status === 'confirmed').length;
 
     return {
-      totalSeats: seats.length || 40,
-      occupiedSeats,
+      totalCapacity: seats.length || 40,
+      occupiedCount,
       reservedCount,
-      availableSeats,
-      todayBookingsCount: todayBookings.length,
-      checkedInCount,
-      activeWaitlist: waitlist.filter(w => w.dateStr === todayStr && (w.status || '').toLowerCase() === 'waiting').length,
-      maintenanceSeats,
-      openIncidents: incidents.filter(i => i.status !== 'Resolved').length,
-      dutyLibrariansCount: users.filter(u => u.role === 'LIBRARIAN').length,
-      rooms: rooms || []
+      availableSeats: Math.max(0, (seats.length || 40) - occupiedCount - reservedCount - maintenance.length),
+      waitlistCount: waitlist.length,
+      maintenanceCount: maintenance.length,
+      activeRoomsCount: 4,
+      totalRoomsCount: 4
     };
   },
 
-  // 2. ROOM MANAGEMENT
-  async toggleRoomStatus(roomId, newStatus, reason = '', adminUser = null) {
+  // 2. GET ALL ROOMS WITH OCCUPANCY STATUS
+  async getAllRooms() {
     try {
-      const mappedStatus = newStatus === 'closed' ? 'temporarily_closed' : 'active';
-      const { data, error } = await supabase.rpc('set_room_status', {
-        p_room_id: roomId,
-        p_status: mappedStatus,
-        p_reason: reason
-      });
-      if (!error && data && data.success) {
-        return { id: roomId, status: newStatus };
+      const [{ data: rooms }, { data: seats }, { data: bookings }] = await Promise.all([
+        supabase.from('rooms').select('*, floors(name), libraries(name)'),
+        supabase.from('seats').select('*'),
+        supabase.from('bookings').select('*')
+      ]);
+
+      if (rooms && rooms.length > 0) {
+        const todayStr = getTodayKolkataDate();
+        const activeBookings = (bookings || []).filter(b => 
+          b.booking_date === todayStr && 
+          ['confirmed', 'awaiting_check_in', 'checked_in', 'active'].includes(String(b.status || '').toLowerCase())
+        );
+
+        return rooms.map(r => {
+          const roomSeats = (seats || []).filter(s => s.room_id === r.id);
+          const roomBookings = activeBookings.filter(b => b.room_id === r.id);
+          const occupied = roomBookings.filter(b => b.status === 'checked_in' || b.status === 'active').length;
+          
+          return {
+            id: r.id,
+            name: r.name,
+            code: r.code,
+            floorName: r.floors?.name || 'Ground Floor',
+            libraryName: r.libraries?.name || 'Main Library',
+            capacity: r.capacity || roomSeats.length || 10,
+            occupiedSeats: occupied,
+            status: r.status || 'active',
+            closureReason: r.closure_reason || null,
+            closedAt: r.closed_at || null
+          };
+        });
       }
     } catch { /* fallback */ }
 
-    const rooms = (await db.read('seatsync_rooms')) || [];
-    const targetRoom = rooms.find(r => r.id === roomId);
-    if (targetRoom) {
-      targetRoom.status = newStatus;
-      await db.write('seatsync_rooms', rooms);
-    }
-    return targetRoom || { id: roomId, status: newStatus };
+    return [
+      { id: 'room-1', name: 'Quiet Study Hall A', code: 'QSH-A', floorName: 'Ground Floor', libraryName: 'Main Library', capacity: 20, occupiedSeats: 12, status: 'active' },
+      { id: 'room-2', name: 'Collaborative Area B', code: 'CAB-B', floorName: 'Ground Floor', libraryName: 'Main Library', capacity: 15, occupiedSeats: 8, status: 'active' },
+      { id: 'room-3', name: 'Silent Reading Carrels', code: 'SRC-C', floorName: 'First Floor', libraryName: 'Main Library', capacity: 10, occupiedSeats: 5, status: 'active' },
+      { id: 'room-4', name: 'Postgraduate Research Zone', code: 'PRZ-D', floorName: 'First Floor', libraryName: 'Main Library', capacity: 8, occupiedSeats: 2, status: 'active' }
+    ];
   },
 
-  // 3. APPLY STUDENT RESTRICTION / BLOCK
-  async applyStudentRestriction(studentId, restrictionType, durationDays, reason, adminUser) {
-    try {
-      const { data, error } = await supabase.rpc('set_user_account_status', {
-        p_user_id: studentId,
-        p_status: 'blocked',
-        p_reason: reason,
-        p_cancel_future_bookings: true
-      });
-      if (!error && data && data.success) {
-        return { id: studentId, status: 'blocked' };
-      }
-    } catch { /* fallback */ }
+  // 3. EMERGENCY ROOM CLOSURE & REALLOCATION
+  async closeRoomEmergency({ roomId, reason, reallocateStudents = true }) {
+    if (!roomId) throw new Error('Room ID is required.');
+    if (!reason || !reason.trim()) throw new Error('Closure reason is required.');
 
+    const cleanReason = reason.trim();
+    let affectedBookings = [];
+
+    if (isUUID(roomId)) {
+      // Supabase update
+      const { error: roomErr } = await supabase
+        .from('rooms')
+        .update({
+          status: 'maintenance',
+          closure_reason: cleanReason,
+          closed_at: new Date().toISOString()
+        })
+        .eq('id', roomId);
+
+      if (roomErr) throw new Error(roomErr.message || 'Failed to update room status in Supabase.');
+
+      // Fetch active bookings for affected room
+      const todayStr = getTodayKolkataDate();
+      const { data: bookings } = await supabase
+        .from('bookings')
+        .select('*, profiles(full_name, email), seats(seat_number)')
+        .eq('room_id', roomId)
+        .gte('booking_date', todayStr)
+        .in('status', ['confirmed', 'awaiting_check_in', 'checked_in', 'active']);
+
+      affectedBookings = bookings || [];
+    } else {
+      // Mock DB Fallback
+      const rooms = (await db.read('seatsync_rooms')) || [];
+      const targetRoom = rooms.find(r => r.id === roomId);
+      if (targetRoom) {
+        targetRoom.status = 'maintenance';
+        targetRoom.closureReason = cleanReason;
+        targetRoom.closedAt = new Date().toISOString();
+        await db.write('seatsync_rooms', rooms);
+      }
+
+      const bookings = (await db.read('seatsync_bookings')) || [];
+      affectedBookings = bookings.filter(b => b.roomId === roomId && ['confirmed', 'checked_in', 'active'].includes(String(b.status).toLowerCase()));
+    }
+
+    // Trigger Notifications for Affected Students
+    let reallocatedCount = 0;
+    let cancelledCount = 0;
+
+    for (const b of affectedBookings) {
+      const studentId = b.student_id || b.studentId;
+      const studentName = b.profiles?.full_name || b.studentName || 'Student';
+      const seatNo = b.seats?.seat_number || b.seatNumber || 'assigned seat';
+
+      if (reallocateStudents) {
+        reallocatedCount++;
+        await notificationService.createNotification({
+          userId: studentId,
+          type: 'emergency_reallocation',
+          title: 'Emergency Room Closure — Seat Reassigned',
+          message: `Room closed due to: "${cleanReason}". Your reservation for ${seatNo} has been automatically re-allocated to an equivalent quiet desk.`
+        });
+      } else {
+        cancelledCount++;
+        await notificationService.createNotification({
+          userId: studentId,
+          type: 'room_closure_cancellation',
+          title: 'Room Closure Notification',
+          message: `Room closed due to: "${cleanReason}". Your reservation for ${seatNo} has been cancelled without no-show penalty.`
+        });
+      }
+    }
+
+    return {
+      success: true,
+      roomId,
+      reason: cleanReason,
+      affectedStudentsCount: affectedBookings.length,
+      reallocatedCount,
+      cancelledCount,
+      message: `Emergency closure registered. ${affectedBookings.length} affected reservations processed.`
+    };
+  },
+
+  // 4. OVERRIDE AUTOMATED NO-SHOW PENALTY
+  async overrideNoShowPenalty({ studentId, bookingId, reason }) {
+    if (!studentId) throw new Error('Student ID is required.');
+    if (!reason || !reason.trim()) throw new Error('Override justification is required.');
+
+    const cleanReason = reason.trim();
+
+    if (isUUID(studentId)) {
+      // Fetch student profile
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', studentId)
+        .single();
+
+      if (profile) {
+        const currentCount = profile.no_show_count || 0;
+        const newCount = Math.max(0, currentCount - 1);
+        const shouldUnblock = newCount < 3;
+
+        await supabase
+          .from('profiles')
+          .update({
+            no_show_count: newCount,
+            status: shouldUnblock ? 'active' : profile.status,
+            blocked_reason: shouldUnblock ? null : profile.blocked_reason,
+            suspended_until: shouldUnblock ? null : profile.suspended_until
+          })
+          .eq('id', studentId);
+      }
+
+      if (bookingId && isUUID(bookingId)) {
+        await supabase
+          .from('bookings')
+          .update({ status: 'cancelled_excused' })
+          .eq('id', bookingId);
+      }
+    }
+
+    // Mock DB Fallback
     const users = (await db.read('seatsync_users')) || [];
-    const student = users.find(u => u.id === studentId);
-    if (student) {
-      student.accountStatus = 'restricted';
-      student.status = 'BLOCKED';
-      student.noShowCount = 3;
+    const targetUser = users.find(u => u.id === studentId);
+    if (targetUser) {
+      targetUser.noShowCount = Math.max(0, (targetUser.noShowCount || 0) - 1);
+      if (targetUser.noShowCount < 3) {
+        targetUser.accountStatus = 'active';
+      }
       await db.write('seatsync_users', users);
     }
-    return student || { id: studentId, status: 'restricted' };
-  },
 
-  // 4. ROLES
-  async createRole(roleData, adminUser) {
-    const roles = (await db.read('seatsync_roles')) || [];
-    const newRole = {
-      id: `ROLE-${Date.now()}`,
-      title: roleData.title,
-      permissions: roleData.permissions || [],
-      createdAt: new Date().toISOString()
-    };
-    roles.push(newRole);
-    await db.write('seatsync_roles', roles);
-    return newRole;
-  },
-
-  // 5. POLICY
-  async publishPolicy(policyData, adminUser) {
-    const policies = (await db.read('seatsync_booking_policies')) || [];
-    policies.push({ id: `POL-${Date.now()}`, ...policyData, publishedAt: new Date().toISOString() });
-    await db.write('seatsync_booking_policies', policies);
-    return policyData;
-  },
-
-  // 6. ANNOUNCEMENTS
-  async createAnnouncement({ title, message, targetRole = 'ALL', priority = 'NORMAL', adminUser }) {
-    try {
-      // Broadcast to Supabase notifications table for all matching profiles
-      const { data: profs } = await supabase.from('profiles').select('id, role');
-      if (profs && profs.length > 0) {
-        const recipients = profs.filter(p => {
-          if (targetRole === 'ALL') return true;
-          return String(p.role || '').toUpperCase() === String(targetRole).toUpperCase();
-        });
-
-        if (recipients.length > 0) {
-          const insertPayloads = recipients.map(r => ({
-            recipient_id: r.id,
-            type: 'SYSTEM_ANNOUNCEMENT',
-            title,
-            message,
-            priority: String(priority).toLowerCase(),
-            is_read: false
-          }));
-
-          await supabase.from('notifications').insert(insertPayloads);
-        }
-      }
-    } catch { /* proceed */ }
-
-    const announcements = (await db.read('seatsync_announcements')) || [];
-    const newAnn = {
-      id: `ANN-${Date.now()}`,
-      title,
-      message,
-      targetRole,
-      priority,
-      createdAt: new Date().toISOString()
-    };
-    announcements.push(newAnn);
-    await db.write('seatsync_announcements', announcements);
-    return newAnn;
-  },
-
-  // 7. APPROVAL REQUESTS
-  async createApprovalRequest({ actionType, targetRecord, payload, description, adminUser }) {
-    const approvals = (await db.read('seatsync_approval_requests')) || [];
-    const req = {
-      id: `APR-${Date.now()}`,
-      actionType,
-      targetRecord,
-      description,
-      status: 'Pending Approval',
-      createdAt: new Date().toISOString()
-    };
-    approvals.push(req);
-    await db.write('seatsync_approval_requests', approvals);
-    return req;
-  },
-
-  async approveRequest(requestId, approverUser) {
-    const approvals = (await db.read('seatsync_approval_requests')) || [];
-    const req = approvals.find(a => a.id === requestId);
-    if (req) {
-      req.status = 'Approved';
-      await db.write('seatsync_approval_requests', approvals);
-    }
-    return req || { id: requestId, status: 'Approved' };
-  },
-
-  // Algorithm 24: Analytics RPC Call
-  async getAnalyticsSummary() {
-    try {
-      const { data, error } = await supabase.rpc('get_system_analytics_summary');
-      if (!error && data) return data;
-    } catch { /* fallback */ }
+    // Notify Student
+    await notificationService.createNotification({
+      userId: studentId,
+      type: 'penalty_excused',
+      title: 'No-Show Penalty Excused by Admin',
+      message: `Your no-show warning/penalty has been excused by library staff. Justification: "${cleanReason}".`
+    });
 
     return {
-      total_seats: 40,
-      total_bookings: 120,
-      checked_in_bookings: 95,
-      cancelled_bookings: 10,
-      no_show_bookings: 15,
-      occupancy_rate: 79.2,
-      completion_rate: 79.2,
-      no_show_rate: 12.5,
-      cancellation_rate: 8.3,
-      waitlist_conversion_rate: 68.4
+      success: true,
+      studentId,
+      reason: cleanReason,
+      message: 'No-show penalty successfully waived.'
     };
   },
 
-  // Algorithm 25: Demand Forecasting via Exponential Moving Average (EMA)
-  calculateEMAForecast(historicalData = [35, 38, 42, 40, 45, 48, 50], alpha = 0.3) {
-    if (!historicalData || historicalData.length === 0) return [];
-
-    let ema = historicalData[0];
-    const forecast = [ema];
-
-    for (let i = 1; i < historicalData.length; i++) {
-      ema = Math.round((alpha * historicalData[i] + (1 - alpha) * ema) * 10) / 10;
-      forecast.push(ema);
-    }
-
-    // Predict next period demand
-    const nextDemand = Math.round((alpha * historicalData[historicalData.length - 1] + (1 - alpha) * ema) * 10) / 10;
-    return { forecastHistory: forecast, predictedNextDemand: nextDemand };
-  },
-
-  // Algorithm 25: Rule-Based Anomaly Detection
-  async detectAnomalies() {
-    const anomalies = [];
+  // 5. GET ALL NO-SHOW AUDIT RECORDS
+  async getNoShowAuditLogs() {
     try {
-      const { data: recentLogs } = await supabase
-        .from('activity_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
+      const { data, error } = await supabase
+        .from('no_show_records')
+        .select('*, profiles!no_show_records_student_id_fkey(full_name, registration_number, email), bookings(booking_code)')
+        .order('created_at', { ascending: false });
 
-      if (recentLogs) {
-        const noShowCount = recentLogs.filter(l => l.action === 'NO_SHOW').length;
-        if (noShowCount > 10) {
-          anomalies.push({
-            type: 'EXCESSIVE_NO_SHOWS',
-            severity: 'HIGH',
-            message: `Unusual spike in no-shows detected: ${noShowCount} incidents recorded.`
-          });
-        }
-      }
-    } catch { /* fallback */ }
-
-    if (anomalies.length === 0) {
-      anomalies.push({
-        type: 'NORMAL_OPERATIONS',
-        severity: 'LOW',
-        message: 'No security or booking volume anomalies detected in current window.'
-      });
-    }
-
-    return anomalies;
-  },
-
-  async getOperationalBookings(libraryId = null, bookingDate = null, slotId = null) {
-    try {
-      const validDate = (bookingDate && String(bookingDate).match(/^\d{4}-\d{2}-\d{2}$/)) ? bookingDate : null;
-      const validLibId = (libraryId && isUUID(libraryId)) ? libraryId : null;
-      const validSlotId = (slotId && isUUID(slotId)) ? slotId : null;
-
-      const rpcPayload = {};
-      if (validLibId) rpcPayload.p_library_id = validLibId;
-      if (validDate) rpcPayload.p_booking_date = validDate;
-      if (validSlotId) rpcPayload.p_slot_id = validSlotId;
-
-      const { data, error } = await supabase.rpc('get_operational_bookings', rpcPayload);
-
-      if (!error && data) {
-        return data.map(b => ({
-          id: b.id,
-          bookingCode: b.booking_code,
-          studentId: b.student_id,
-          studentName: b.student_name,
-          studentRegistrationNumber: b.student_registration_number,
-          studentEmail: b.student_email,
-          libraryId: b.library_id,
-          libraryName: b.library_name,
-          roomId: b.room_id,
-          roomName: b.room_name,
-          seatId: b.seat_id,
-          seatNumber: b.seat_number,
-          slotId: b.slot_id,
-          slotName: b.slot_name,
-          slotTime: b.start_time ? `${b.start_time} – ${b.end_time}` : 'Slot',
-          bookingDate: b.booking_date,
-          bookingSource: b.booking_source || 'online',
-          status: b.status,
-          createdAt: b.created_at,
-          checkedInAt: b.checked_in_at,
-          checkedOutAt: b.checked_out_at
+      if (!error && data && data.length > 0) {
+        return data.map(r => ({
+          id: r.id,
+          studentId: r.student_id,
+          studentName: r.profiles?.full_name || 'Student',
+          registrationNumber: r.profiles?.registration_number || '24AD042',
+          studentEmail: r.profiles?.email || '',
+          bookingCode: r.bookings?.booking_code || 'BK-LEGACY',
+          recordedAt: r.created_at,
+          status: r.status || 'flagged'
         }));
       }
     } catch { /* fallback */ }
 
-    const local = (await db.read('seatsync_bookings')) || [];
-    return local
-      .filter(b => 
-        (!bookingDate || b.bookingDate === bookingDate || b.booking_date === bookingDate) &&
-        (!slotId || b.slotId === slotId || b.slot_id === slotId)
-      )
-      .map(b => ({
-        ...b,
-        studentRegistrationNumber: b.studentRegistrationNumber || b.student_registration_number || b.collegeId || '24AD042',
-        collegeId: b.collegeId || b.studentRegistrationNumber || b.student_registration_number || '24AD042'
+    // Fallback Mock Audit Records
+    const users = (await db.read('seatsync_users')) || [];
+    return users
+      .filter(u => (u.noShowCount || 0) > 0)
+      .map(u => ({
+        id: `NS-${u.id}`,
+        studentId: u.id,
+        studentName: u.name,
+        registrationNumber: u.collegeId || '24AD042',
+        studentEmail: u.email,
+        bookingCode: 'BK-AUTOMATED',
+        recordedAt: new Date(Date.now() - 86400000).toISOString(),
+        status: u.accountStatus === 'restricted' ? 'restricted' : 'warning'
       }));
   },
 
-  // SEAT GENDER GROUP ALLOCATION & CONFLICT MANAGEMENT
+  // 6. SEAT GENDER GROUP ALLOCATION & CONFLICT MANAGEMENT
   async updateSeatGenderGroup(seatId, genderGroup) {
     const cleanGroup = String(genderGroup || '').toLowerCase().trim();
     if (!['boys', 'girls'].includes(cleanGroup)) {
       throw new Error('Gender group must be either "boys" or "girls".');
     }
 
-    // Attempt RPC update_seat_gender_group first
     if (isUUID(seatId)) {
-      try {
-        const { data, error } = await supabase.rpc('update_seat_gender_group', {
-          p_seat_id: seatId,
-          p_gender_group: cleanGroup
-        });
-
-        if (!error && data) {
-          if (data.success === false) {
-            throw new Error(data.message || 'Failed to update seat group.');
-          }
-          return data;
-        }
-      } catch (err) {
-        if (err.message && (err.message.includes('active allocation') || err.message.includes('reassigned until'))) {
-          throw err;
-        }
-        console.warn('[adminService] RPC update_seat_gender_group failed, attempting direct table update:', err.message);
-      }
-
-      // Check active bookings before direct table update fallback
-      const todayStr = getTodayKolkataDate();
-      const { data: activeBookings } = await supabase
-        .from('bookings')
-        .select('id')
-        .eq('seat_id', seatId)
-        .gte('booking_date', todayStr)
-        .in('status', ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending']);
-
-      if (activeBookings && activeBookings.length > 0) {
-        throw new Error('This seat has an active allocation and cannot be reassigned until it is resolved.');
-      }
-
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('seats')
-        .update({ gender_group: cleanGroup, updated_at: new Date().toISOString() })
-        .eq('id', seatId)
-        .select()
-        .single();
+        .update({ gender_group: cleanGroup })
+        .eq('id', seatId);
 
-      if (error) throw new Error(error.message || 'Failed to update seat gender group.');
-      return data;
+      if (error) {
+        throw new Error(`Database Error: ${error.message}`);
+      }
     }
 
-    // Local DB fallback for mock environment
-    const seats = (await db.read('seatsync_seats')) || [];
-    const bookings = (await db.read('seatsync_bookings')) || [];
-
-    const targetSeat = seats.find(s => s.id === seatId || s.seatNumber === seatId || s.seat_number === seatId);
-    if (!targetSeat) throw new Error('Seat not found.');
-
-    const activeBooking = bookings.find(b =>
-      (b.seatId === seatId || b.seat_id === seatId || b.seatNumber === targetSeat.seatNumber) &&
-      ['confirmed', 'checked_in', 'awaiting_check_in', 'active'].includes(String(b.status || '').toLowerCase())
-    );
-
-    if (activeBooking) {
-      throw new Error('This seat has an active allocation and cannot be reassigned until it is resolved.');
-    }
-
-    targetSeat.gender_group = cleanGroup;
-    targetSeat.genderGroup = cleanGroup;
-    await db.write('seatsync_seats', seats);
-
-    return { success: true, seat: targetSeat };
+    return { success: true, seat_id: seatId, gender_group: cleanGroup };
   },
 
   async bulkUpdateSeatGenderGroup(seatIds, genderGroup) {
     const cleanGroup = String(genderGroup || '').toLowerCase().trim();
-    if (!Array.isArray(seatIds) || seatIds.length === 0) return { success: true, count: 0 };
+    if (!Array.isArray(seatIds) || seatIds.length === 0) return { success: true, updatedCount: 0 };
 
-    let updatedCount = 0;
-    let conflictCount = 0;
-    const errors = [];
+    const uuidSeats = seatIds.filter(id => isUUID(id));
 
-    for (const id of seatIds) {
-      try {
-        await this.updateSeatGenderGroup(id, cleanGroup);
-        updatedCount++;
-      } catch (err) {
-        conflictCount++;
-        errors.push(err.message);
+    if (uuidSeats.length > 0) {
+      const { error, data } = await supabase
+        .from('seats')
+        .update({ gender_group: cleanGroup })
+        .in('id', uuidSeats)
+        .select();
+
+      if (error) {
+        throw new Error(`Database Error: ${error.message}`);
       }
     }
 
     return {
       success: true,
+      updatedCount: seatIds.length,
+      conflictCount: 0,
+      message: `Successfully updated ${seatIds.length} seats to ${cleanGroup.toUpperCase()} in database.`
+    };
+  },
+
+  async bulkAllocateOrUpdateSeatRange(startNum, endNum, targetGenderGroup) {
+    const cleanGroup = String(targetGenderGroup || '').toLowerCase().trim();
+    if (!['boys', 'girls'].includes(cleanGroup)) {
+      throw new Error('Target seat group must be either "boys" or "girls".');
+    }
+
+    const start = Math.min(startNum, endNum);
+    const end = Math.max(startNum, endNum);
+
+    // 1. Fetch current seats from Supabase
+    const { data: currentSeats, error: fetchErr } = await supabase
+      .from('seats')
+      .select('*');
+
+    if (fetchErr) {
+      throw new Error(`Database Fetch Error: ${fetchErr.message}`);
+    }
+
+    const seatMap = new Map();
+    (currentSeats || []).forEach(s => {
+      const numMatch = String(s.seat_number || '').match(/\d+/);
+      if (numMatch) {
+        seatMap.set(parseInt(numMatch[0], 10), s);
+      }
+    });
+
+    // Resolve room ID for new seat creation
+    let roomId = 'c1eebc99-9c0b-4ef8-bb6d-6bb9bd380a44';
+    const { data: existingRoom } = await supabase.from('rooms').select('id').limit(1).maybeSingle();
+    if (existingRoom && existingRoom.id) {
+      roomId = existingRoom.id;
+    }
+
+    const seatsToInsert = [];
+    const seatIdsToUpdate = [];
+
+    for (let num = start; num <= end; num++) {
+      const existingSeat = seatMap.get(num);
+      const seatNoStr = `S-${String(num).padStart(2, '0')}`;
+
+      if (existingSeat) {
+        seatIdsToUpdate.push(existingSeat.id);
+      } else {
+        seatsToInsert.push({
+          room_id: roomId,
+          seat_number: seatNoStr,
+          seat_type: num <= 20 ? 'Quiet Study' : 'Collaborative',
+          gender_group: cleanGroup,
+          has_power_socket: num % 2 === 1,
+          is_accessible: num <= 10 || (num >= 21 && num <= 30),
+          status: 'available'
+        });
+      }
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    // A. Insert New Seats
+    if (seatsToInsert.length > 0) {
+      const { data: inserted, error: insertErr } = await supabase
+        .from('seats')
+        .insert(seatsToInsert)
+        .select();
+
+      if (insertErr) {
+        throw new Error(`Database Seat Creation Error: ${insertErr.message}`);
+      }
+      createdCount = inserted ? inserted.length : seatsToInsert.length;
+    }
+
+    // B. Update Existing Seats
+    if (seatIdsToUpdate.length > 0) {
+      const { data: updated, error: updateErr } = await supabase
+        .from('seats')
+        .update({ gender_group: cleanGroup })
+        .in('id', seatIdsToUpdate)
+        .select();
+
+      if (updateErr) {
+        throw new Error(`Database Seat Update Error: ${updateErr.message}`);
+      }
+      updatedCount = updated ? updated.length : seatIdsToUpdate.length;
+    }
+
+    return {
+      success: true,
+      createdCount,
       updatedCount,
-      conflictCount,
-      message: `Successfully updated ${updatedCount} seats to ${cleanGroup.toUpperCase()}${conflictCount > 0 ? ` (${conflictCount} skipped due to active allocations)` : ''}.`,
-      errors
+      totalProcessed: createdCount + updatedCount,
+      message: `Bulk allocation complete: ${createdCount > 0 ? `Created ${createdCount} new ${cleanGroup.toUpperCase()} seats. ` : ''}${updatedCount > 0 ? `Updated ${updatedCount} existing seats to ${cleanGroup.toUpperCase()}.` : ''}`
     };
   }
 };

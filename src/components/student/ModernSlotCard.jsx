@@ -40,10 +40,12 @@ export function ModernSlotCard({
   
   const availableSeats = slot.availableCount !== undefined 
     ? slot.availableCount 
-    : (slot.available_seats !== undefined ? slot.available_seats : (isSlotCancelled ? 0 : 40));
+    : (slot.available_seats !== undefined ? slot.available_seats : (isSlotCancelled ? 0 : 0));
 
-  const operationalSeats = slot.operationalSeats || slot.operational_seats || slot.physicalTotalSeats || slot.totalCount || 40;
-  const reservedSeats = slot.reservedSeats || slot.reserved_seats || Math.max(0, operationalSeats - availableSeats);
+  const operationalSeats = slot.operationalSeats ?? slot.operational_seats ?? slot.physicalTotalSeats ?? slot.totalCount ?? availableSeats;
+  const reservedSeats = slot.reservedSeats !== undefined 
+    ? slot.reservedSeats 
+    : (slot.reserved_seats !== undefined ? slot.reserved_seats : Math.max(0, operationalSeats - availableSeats));
 
   const isFullyBooked = !isSlotCancelled && Number(availableSeats) === 0;
   const isStudentWaiting = !isSlotCancelled && Boolean(waitlistSummary.isStudentWaiting || slot.studentWaitlistPosition);
