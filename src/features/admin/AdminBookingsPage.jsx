@@ -177,7 +177,7 @@ export default function AdminBookingsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {filtered.map(b => (
                     <tr key={b.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-3.5 font-mono font-bold text-navy">{b.id}</td>
+                      <td className="p-3.5 font-mono font-bold text-navy">{b.bookingCode || b.id}</td>
                       <td className="p-3.5 font-bold text-navy">{b.studentName}</td>
                       <td className="p-3.5 font-mono">{b.bookingDate}</td>
                       <td className="p-3.5 font-bold text-indigo-600">{b.seatNumber}</td>

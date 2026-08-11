@@ -150,13 +150,23 @@ export const bookingService = {
       const isDisabledByAdmin = slot.status === 'disabled' || slot.status === 'cancelled' || !!disabledRecord;
 
       const slotBookings = sourceBookings.filter(b => {
-        const bSlotId = b.slot_id || b.slotId;
+        const bSlotId = String(b.slot_id || b.slotId || '').toLowerCase();
         const bDate = b.booking_date || b.bookingDate;
         const bStatus = String(b.status || '').toLowerCase();
 
-        return (bSlotId === slotId || bSlotId === slot.name || bSlotId === slot.label) &&
-          (bDate === dateStr) &&
+        const isMatchingSlot = bSlotId === String(slot.id).toLowerCase() ||
+          bSlotId === String(slot.name || '').toLowerCase() ||
+          bSlotId === String(slot.label || '').toLowerCase();
+
+        return isMatchingSlot && (bDate === dateStr) &&
           ['confirmed', 'awaiting_check_in', 'checked_in', 'active', 'checkout_pending'].includes(bStatus);
+      });
+
+      const onlineSeatIdSet = new Set(onlineSeats.map(s => String(s.id)));
+      const validSlotBookings = slotBookings.filter(b => {
+        const bSeatId = b.seat_id || b.seatId;
+        if (!bSeatId) return true;
+        return onlineSeatIdSet.has(String(bSeatId));
       });
 
       const isBookedByStudent = studentId ? slotBookings.some(b => {
@@ -164,7 +174,7 @@ export const bookingService = {
         return String(bStudentId) === String(studentId);
       }) : false;
 
-      const reservedSeats = new Set(slotBookings.map(b => b.seat_id || b.seatId).filter(Boolean)).size || slotBookings.length;
+      const reservedSeats = new Set(validSlotBookings.map(b => b.seat_id || b.seatId).filter(Boolean)).size || validSlotBookings.length;
       const availableCount = isDisabledByAdmin ? 0 : Math.max(0, operationalSeats - reservedSeats);
 
       return {
